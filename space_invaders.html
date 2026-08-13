@@ -53,6 +53,7 @@
   <body>
     <div id="hud">
       <span>SCORE: <span id="scoreVal">0</span></span>
+      <span>BEST: <span id="hiVal">0</span></span>
       <span>LIVES: <span id="livesVal">3</span></span>
       <span>LEVEL: <span id="levelVal">1</span></span>
     </div>
@@ -148,6 +149,17 @@
       let score = 0,
         lives = 3,
         level = 1;
+      let hiScore = parseInt(localStorage.getItem("si_hiscore") || "0", 10);
+      const hiEl = document.getElementById("hiVal");
+      hiEl.textContent = hiScore;
+
+      function saveHiScore() {
+        if (score > hiScore) {
+          hiScore = score;
+          localStorage.setItem("si_hiscore", hiScore);
+          hiEl.textContent = hiScore;
+        }
+      }
       let lastTime = 0,
         rafId;
 
@@ -166,8 +178,8 @@
       });
 
       // ── Player ────────────────────────────────────────────────────────────────
-      const PW = 64,
-        PH = 36;
+      const PW = 48,
+        PH = 28;
       let player, playerBullet, shootCooldown;
 
       function makePlayer() {
@@ -550,6 +562,7 @@
         scoreEl.textContent = score;
         livesEl.textContent = lives;
         levelEl.textContent = level;
+        saveHiScore();
       }
 
       // ── Collision helpers ─────────────────────────────────────────────────────
@@ -727,9 +740,10 @@
             player = makePlayer();
             if (lives <= 0) {
               state = "gameover";
+              saveHiScore();
               showOverlay(
                 "GAME OVER",
-                `Score: ${score}`,
+                `Score: ${score}  |  Best: ${hiScore}`,
                 "Press SPACE to restart",
               );
             } else {
@@ -749,9 +763,10 @@
         for (const inv of invaders) {
           if (inv.alive && inv.y + INV_H >= player.y) {
             state = "gameover";
+            saveHiScore();
             showOverlay(
               "GAME OVER",
-              "The invaders reached Earth!",
+              `Score: ${score}  |  Best: ${hiScore}`,
               "Press SPACE to restart",
             );
             return;
