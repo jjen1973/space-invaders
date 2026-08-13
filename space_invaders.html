@@ -1,0 +1,892 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Space Invaders</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        background: #000;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        font-family: "Courier New", monospace;
+        color: #0f0;
+      }
+      #hud {
+        display: flex;
+        gap: 60px;
+        margin-bottom: 8px;
+        font-size: 16px;
+        letter-spacing: 2px;
+      }
+      canvas {
+        display: block;
+      }
+      #overlay {
+        position: absolute;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+      }
+      #title-canvas {
+        image-rendering: pixelated;
+      }
+      #overlay p {
+        font-size: 16px;
+        color: #aaa;
+      }
+      #overlay .sub {
+        font-size: 14px;
+        color: #666;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="hud">
+      <span>SCORE: <span id="scoreVal">0</span></span>
+      <span>LIVES: <span id="livesVal">3</span></span>
+      <span>LEVEL: <span id="levelVal">1</span></span>
+    </div>
+    <canvas id="c" width="700" height="520"></canvas>
+    <div id="overlay">
+      <canvas id="title-canvas"></canvas>
+      <p>&#8592; &#8594; Move &nbsp;&nbsp; SPACE Shoot</p>
+      <p class="sub">Press SPACE to start</p>
+    </div>
+
+    <script>
+      // ── Pixel-art title ───────────────────────────────────────────────────────
+      // 3×5 slim alien dot-matrix font (columns = bitmask rows top→bottom)
+      const FONT3 = {
+        S: [0b01110, 0b10000, 0b01110, 0b00001, 0b11110],
+        P: [0b11110, 0b10001, 0b11110, 0b10000, 0b10000],
+        A: [0b01110, 0b10001, 0b11111, 0b10001, 0b10001],
+        C: [0b01111, 0b10000, 0b10000, 0b10000, 0b01111],
+        E: [0b11111, 0b10000, 0b11110, 0b10000, 0b11111],
+        I: [0b11111, 0b00100, 0b00100, 0b00100, 0b11111],
+        N: [0b10001, 0b11001, 0b10101, 0b10011, 0b10001],
+        V: [0b10001, 0b10001, 0b10001, 0b01010, 0b00100],
+        D: [0b11110, 0b10001, 0b10001, 0b10001, 0b11110],
+        R: [0b11110, 0b10001, 0b11110, 0b10010, 0b10001],
+        " ": null,
+      };
+      const SCALE = 4,
+        COLF = 7 * SCALE,
+        ROWH = 7 * SCALE;
+
+      function drawPixelTitle() {
+        const tc = document.getElementById("title-canvas");
+        const text = "SPACE INVADERS";
+        const cols = text.length;
+        tc.width = cols * COLF;
+        tc.height = ROWH + 10;
+        const tx = tc.getContext("2d");
+
+        // glow layer
+        tx.shadowColor = "#00ff00";
+        tx.shadowBlur = 10;
+
+        text.split("").forEach((ch, ci) => {
+          const glyph = FONT3[ch];
+          if (!glyph) return;
+          for (let row = 0; row < 5; row++) {
+            const bits = glyph[row];
+            for (let col = 0; col < 5; col++) {
+              if (bits & (1 << (4 - col))) {
+                // slight colour gradient: top rows cyan→green
+                const t = row / 4;
+                const r = Math.round(0 + t * 0);
+                const g = Math.round(220 + t * 35);
+                const b = Math.round(220 - t * 220);
+                tx.fillStyle = `rgb(${r},${g},${b})`;
+                tx.fillRect(
+                  ci * COLF + col * SCALE + SCALE,
+                  row * SCALE + SCALE,
+                  SCALE - 1,
+                  SCALE - 1,
+                );
+              }
+            }
+          }
+          // tiny alien "antenna" dots on top of each letter
+          tx.fillStyle = "#00ffcc";
+          tx.shadowBlur = 6;
+          tx.fillRect(ci * COLF + 2 * SCALE, 0, SCALE - 1, SCALE - 1);
+          tx.fillRect(ci * COLF + 4 * SCALE, 0, SCALE - 1, SCALE - 1);
+        });
+      }
+      drawPixelTitle();
+
+      const canvas = document.getElementById("c");
+      const ctx = canvas.getContext("2d");
+      const overlay = document.getElementById("overlay");
+      const scoreEl = document.getElementById("scoreVal");
+      const livesEl = document.getElementById("livesVal");
+      const levelEl = document.getElementById("levelVal");
+
+      const W = canvas.width;
+      const H = canvas.height;
+
+      // ── Colours ───────────────────────────────────────────────────────────────
+      const GREEN = "#00ff00";
+      const RED = "#ff2222";
+      const CYAN = "#00ffff";
+      const YELLOW = "#ffff00";
+      const WHITE = "#ffffff";
+
+      // ── Game state ────────────────────────────────────────────────────────────
+      let state = "title"; // title | playing | paused | dead | win | gameover
+      let score = 0,
+        lives = 3,
+        level = 1;
+      let lastTime = 0,
+        rafId;
+
+      // ── Input ─────────────────────────────────────────────────────────────────
+      const keys = {};
+      document.addEventListener("keydown", (e) => {
+        keys[e.code] = true;
+        if (e.code === "Space") e.preventDefault();
+        if (state === "title" && e.code === "Space") startGame();
+        else if (state === "dead" && e.code === "Space") nextLevel(false);
+        else if (state === "win" && e.code === "Space") nextLevel(true);
+        else if (state === "gameover" && e.code === "Space") resetAll();
+      });
+      document.addEventListener("keyup", (e) => {
+        keys[e.code] = false;
+      });
+
+      // ── Player ────────────────────────────────────────────────────────────────
+      const PW = 64,
+        PH = 36;
+      let player, playerBullet, shootCooldown;
+
+      function makePlayer() {
+        return { x: W / 2 - PW / 2, y: H - 50, w: PW, h: PH, speed: 300 };
+      }
+
+      function drawPlayer(p) {
+        const cx = p.x + PW / 2;
+        ctx.shadowColor = "#00ff88";
+        ctx.shadowBlur = 12;
+        ctx.fillStyle = "#00ff88";
+        // cannon tip
+        ctx.fillRect(cx - 3, p.y, 6, 10);
+        // cockpit dome
+        ctx.fillRect(cx - 8, p.y + 8, 16, 8);
+        // main body
+        ctx.fillRect(p.x + 8, p.y + 14, PW - 16, 14);
+        // wings
+        ctx.fillRect(p.x, p.y + 20, 14, 10);
+        ctx.fillRect(p.x + PW - 14, p.y + 20, 14, 10);
+        // engine nozzles
+        ctx.fillStyle = "#00ccff";
+        ctx.fillRect(p.x + 4, p.y + PH - 8, 8, 8);
+        ctx.fillRect(p.x + PW - 12, p.y + PH - 8, 8, 8);
+        ctx.fillRect(cx - 4, p.y + PH - 6, 8, 6);
+        ctx.shadowBlur = 0;
+      }
+
+      // ── Bullets ───────────────────────────────────────────────────────────────
+      const BULLET_SPEED = 500;
+      const ENEMY_BULLET_SPEED = 220;
+
+      function makeBullet(x, y, dy, color) {
+        return { x, y, dy, color, active: true };
+      }
+
+      let enemyBullets = [];
+
+      // ── Invaders ──────────────────────────────────────────────────────────────
+      const INV_ROWS = 5,
+        INV_COLS = 11;
+      const INV_W = 36,
+        INV_H = 28,
+        INV_PAD = 14;
+      let invaders = [],
+        invDir = 1,
+        invDropping = false;
+      let invMoveTimer = 0,
+        invMoveInterval = 0.8;
+      let invBulletTimer = 0,
+        invBulletInterval = 1.2;
+      let invFrame = 0; // animation frame 0/1
+
+      function makeInvaders() {
+        invaders = [];
+        for (let r = 0; r < INV_ROWS; r++) {
+          for (let c = 0; c < INV_COLS; c++) {
+            invaders.push({
+              x: 60 + c * (INV_W + INV_PAD),
+              y: 60 + r * (INV_H + 12),
+              row: r,
+              col: c,
+              alive: true,
+            });
+          }
+        }
+        invDir = 1;
+        invDropping = false;
+        invMoveTimer = 0;
+        invBulletTimer = 0;
+        invFrame = 0;
+        updateSpeed();
+      }
+
+      function updateSpeed() {
+        const remaining = invaders.filter((i) => i.alive).length;
+        const total = INV_ROWS * INV_COLS;
+        const frac = remaining / total;
+        // faster as fewer invaders remain, plus level bonus
+        invMoveInterval = Math.max(0.06, 0.8 * frac - (level - 1) * 0.08);
+        invBulletInterval = Math.max(0.4, 1.2 * frac - (level - 1) * 0.1);
+      }
+
+      // Draw a pixel-art style alien (3 types by row)
+      function drawInvader(inv) {
+        const f = invFrame;
+        ctx.save();
+        ctx.translate(inv.x, inv.y);
+        if (inv.row === 0) {
+          // UFO-like top row — magenta
+          ctx.fillStyle = "#ff44ff";
+          drawUFO(f);
+        } else if (inv.row <= 2) {
+          // Crab mid rows — cyan
+          ctx.fillStyle = CYAN;
+          drawCrab(f);
+        } else {
+          // Squid bottom rows — yellow
+          ctx.fillStyle = YELLOW;
+          drawSquid(f);
+        }
+        ctx.restore();
+      }
+
+      function pixel(x, y, s = 4) {
+        ctx.fillRect(x * s, y * s, s, s);
+      }
+
+      // 8×8 pixel art, scaled ×4  (32×32 drawn in 36×28 cell — slight overdraw ok)
+      function drawUFO(f) {
+        const p =
+          f === 0
+            ? [
+                [1, 2],
+                [2, 1],
+                [2, 2],
+                [3, 2],
+                [4, 2],
+                [5, 2],
+                [6, 2],
+                [7, 1],
+                [7, 2],
+                [3, 0],
+                [4, 0],
+                [3, 1],
+                [4, 1],
+                [2, 3],
+                [3, 3],
+                [4, 3],
+                [5, 3],
+                [6, 3],
+              ]
+            : [
+                [1, 2],
+                [2, 1],
+                [2, 2],
+                [3, 2],
+                [4, 2],
+                [5, 2],
+                [6, 2],
+                [7, 1],
+                [7, 2],
+                [3, 0],
+                [4, 0],
+                [3, 1],
+                [4, 1],
+                [1, 3],
+                [3, 3],
+                [5, 3],
+                [7, 3],
+              ];
+        p.forEach(([x, y]) => pixel(x, y));
+      }
+      function drawCrab(f) {
+        const p =
+          f === 0
+            ? [
+                [3, 0],
+                [4, 0],
+                [2, 1],
+                [3, 1],
+                [4, 1],
+                [5, 1],
+                [1, 2],
+                [2, 2],
+                [3, 2],
+                [4, 2],
+                [5, 2],
+                [6, 2],
+                [0, 3],
+                [1, 3],
+                [3, 3],
+                [4, 3],
+                [6, 3],
+                [7, 3],
+                [0, 4],
+                [2, 4],
+                [5, 4],
+                [7, 4],
+              ]
+            : [
+                [3, 0],
+                [4, 0],
+                [2, 1],
+                [3, 1],
+                [4, 1],
+                [5, 1],
+                [1, 2],
+                [2, 2],
+                [3, 2],
+                [4, 2],
+                [5, 2],
+                [6, 2],
+                [0, 3],
+                [1, 3],
+                [3, 3],
+                [4, 3],
+                [6, 3],
+                [7, 3],
+                [1, 4],
+                [3, 4],
+                [4, 4],
+                [6, 4],
+              ];
+        p.forEach(([x, y]) => pixel(x, y));
+      }
+      function drawSquid(f) {
+        const p =
+          f === 0
+            ? [
+                [3, 0],
+                [4, 0],
+                [2, 1],
+                [3, 1],
+                [4, 1],
+                [5, 1],
+                [1, 2],
+                [2, 2],
+                [3, 2],
+                [4, 2],
+                [5, 2],
+                [6, 2],
+                [1, 3],
+                [2, 3],
+                [3, 3],
+                [4, 3],
+                [5, 3],
+                [6, 3],
+                [0, 4],
+                [2, 4],
+                [5, 4],
+                [7, 4],
+              ]
+            : [
+                [3, 0],
+                [4, 0],
+                [2, 1],
+                [3, 1],
+                [4, 1],
+                [5, 1],
+                [1, 2],
+                [2, 2],
+                [3, 2],
+                [4, 2],
+                [5, 2],
+                [6, 2],
+                [1, 3],
+                [2, 3],
+                [3, 3],
+                [4, 3],
+                [5, 3],
+                [6, 3],
+                [1, 4],
+                [3, 4],
+                [4, 4],
+                [6, 4],
+              ];
+        p.forEach(([x, y]) => pixel(x, y));
+      }
+
+      // ── Shields ───────────────────────────────────────────────────────────────
+      const SHIELD_COUNT = 4;
+      const BLOCK = 6; // pixels per shield block
+      let shields = [];
+
+      function makeShields() {
+        shields = [];
+        for (let s = 0; s < SHIELD_COUNT; s++) {
+          const ox = 80 + s * 155;
+          const oy = H - 120;
+          // 11 wide × 8 tall, with bottom-middle cutout
+          for (let r = 0; r < 8; r++) {
+            for (let c = 0; c < 11; c++) {
+              // cutout: bottom 3 rows, cols 4-6
+              if (r >= 5 && c >= 4 && c <= 6) continue;
+              shields.push({ x: ox + c * BLOCK, y: oy + r * BLOCK, hp: 3 });
+            }
+          }
+        }
+      }
+
+      function drawShields() {
+        shields.forEach((b) => {
+          if (b.hp <= 0) return;
+          const g = Math.floor(50 + b.hp * 60);
+          ctx.fillStyle = `rgb(0,${g},0)`;
+          ctx.fillRect(b.x, b.y, BLOCK, BLOCK);
+        });
+      }
+
+      // ── UFO (mystery ship) ────────────────────────────────────────────────────
+      let ufo = null,
+        ufoTimer = 0,
+        ufoInterval = 20;
+
+      function spawnUFO() {
+        ufo = { x: -60, y: 30, speed: 120, color: RED };
+      }
+
+      function drawUFOShip() {
+        if (!ufo) return;
+        ctx.fillStyle = RED;
+        ctx.fillRect(ufo.x + 10, ufo.y + 6, 40, 14);
+        ctx.fillRect(ufo.x + 18, ufo.y, 24, 8);
+        ctx.fillRect(ufo.x + 4, ufo.y + 16, 8, 6);
+        ctx.fillRect(ufo.x + 48, ufo.y + 16, 8, 6);
+        ctx.fillRect(ufo.x + 26, ufo.y + 16, 8, 6);
+        ctx.fillStyle = "#ff9900";
+        ctx.fillRect(ufo.x + 14, ufo.y + 10, 6, 6);
+        ctx.fillRect(ufo.x + 30, ufo.y + 10, 6, 6);
+        ctx.fillRect(ufo.x + 46, ufo.y + 10, 6, 6);
+      }
+
+      // ── Explosion particles ───────────────────────────────────────────────────
+      let particles = [];
+
+      function explode(x, y, color, n = 12) {
+        for (let i = 0; i < n; i++) {
+          const angle = (Math.PI * 2 * i) / n + Math.random() * 0.3;
+          const speed = 40 + Math.random() * 80;
+          particles.push({
+            x,
+            y,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            life: 0.6 + Math.random() * 0.4,
+            color,
+          });
+        }
+      }
+
+      // ── Start / reset ─────────────────────────────────────────────────────────
+      function startGame() {
+        score = 0;
+        lives = 3;
+        level = 1;
+        initLevel();
+        state = "playing";
+        overlay.style.display = "none";
+        lastTime = performance.now();
+        cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(loop);
+      }
+
+      function initLevel() {
+        player = makePlayer();
+        playerBullet = null;
+        shootCooldown = 0;
+        enemyBullets = [];
+        particles = [];
+        ufo = null;
+        ufoTimer = 0;
+        ufoInterval = Math.max(8, 20 - level * 1.5);
+        makeInvaders();
+        makeShields();
+        updateHUD();
+      }
+
+      function nextLevel(won) {
+        if (won) {
+          level++;
+        }
+        initLevel();
+        state = "playing";
+        overlay.style.display = "none";
+        lastTime = performance.now();
+        cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(loop);
+      }
+
+      function resetAll() {
+        score = 0;
+        lives = 3;
+        level = 1;
+        startGame();
+      }
+
+      // ── HUD ───────────────────────────────────────────────────────────────────
+      function updateHUD() {
+        scoreEl.textContent = score;
+        livesEl.textContent = lives;
+        levelEl.textContent = level;
+      }
+
+      // ── Collision helpers ─────────────────────────────────────────────────────
+      function hitRect(bx, by, rx, ry, rw, rh) {
+        return bx >= rx && bx <= rx + rw && by >= ry && by <= ry + rh;
+      }
+
+      // ── Main loop ─────────────────────────────────────────────────────────────
+      function loop(ts) {
+        const dt = Math.min((ts - lastTime) / 1000, 0.05);
+        lastTime = ts;
+
+        if (state === "playing") update(dt);
+        render();
+
+        if (state === "playing" || state === "paused") {
+          rafId = requestAnimationFrame(loop);
+        }
+      }
+
+      // ── Update ────────────────────────────────────────────────────────────────
+      function update(dt) {
+        // Player movement
+        if (keys["ArrowLeft"] || keys["KeyA"]) player.x -= player.speed * dt;
+        if (keys["ArrowRight"] || keys["KeyD"]) player.x += player.speed * dt;
+        player.x = Math.max(0, Math.min(W - PW, player.x));
+
+        // Shoot
+        shootCooldown -= dt;
+        if (keys["Space"] && shootCooldown <= 0 && !playerBullet) {
+          playerBullet = makeBullet(
+            player.x + PW / 2 - 2,
+            player.y - 4,
+            -BULLET_SPEED,
+            GREEN,
+          );
+          shootCooldown = 0.35;
+        }
+
+        // Player bullet movement
+        if (playerBullet) {
+          playerBullet.y += playerBullet.dy * dt;
+          if (playerBullet.y < 0) playerBullet = null;
+        }
+
+        // Invader movement
+        invMoveTimer += dt;
+        if (invMoveTimer >= invMoveInterval) {
+          invMoveTimer = 0;
+          invFrame = 1 - invFrame;
+
+          if (invDropping) {
+            invaders.forEach((i) => {
+              if (i.alive) i.y += 16;
+            });
+            invDropping = false;
+            invDir *= -1;
+          } else {
+            let edge = false;
+            invaders.forEach((i) => {
+              if (!i.alive) return;
+              i.x += invDir * 12;
+              if (i.x <= 4 || i.x + INV_W >= W - 4) edge = true;
+            });
+            if (edge) invDropping = true;
+          }
+          updateSpeed();
+        }
+
+        // UFO
+        ufoTimer += dt;
+        if (!ufo && ufoTimer >= ufoInterval) {
+          ufoTimer = 0;
+          ufoInterval = Math.max(8, 20 - level * 1.5) + Math.random() * 10;
+          spawnUFO();
+        }
+        if (ufo) {
+          ufo.x += ufo.speed * dt;
+          if (ufo.x > W + 80) ufo = null;
+        }
+
+        // Enemy shooting
+        invBulletTimer += dt;
+        if (invBulletTimer >= invBulletInterval) {
+          invBulletTimer = 0;
+          const alive = invaders.filter((i) => i.alive);
+          if (alive.length) {
+            const shooter = alive[Math.floor(Math.random() * alive.length)];
+            enemyBullets.push(
+              makeBullet(
+                shooter.x + INV_W / 2,
+                shooter.y + INV_H,
+                ENEMY_BULLET_SPEED + level * 15,
+                RED,
+              ),
+            );
+          }
+        }
+
+        // Enemy bullet movement
+        enemyBullets.forEach((b) => {
+          b.y += b.dy * dt;
+        });
+        enemyBullets = enemyBullets.filter((b) => b.y < H);
+
+        // ── Collision: player bullet vs invaders ─────────────────────────────
+        if (playerBullet) {
+          let hit = false;
+          for (const inv of invaders) {
+            if (!inv.alive) continue;
+            if (
+              hitRect(
+                playerBullet.x,
+                playerBullet.y,
+                inv.x,
+                inv.y,
+                INV_W,
+                INV_H,
+              )
+            ) {
+              inv.alive = false;
+              explode(inv.x + INV_W / 2, inv.y + INV_H / 2, CYAN);
+              const points = inv.row === 0 ? 30 : inv.row <= 2 ? 20 : 10;
+              score += points;
+              updateHUD();
+              playerBullet = null;
+              hit = true;
+              updateSpeed();
+              break;
+            }
+          }
+          // vs UFO
+          if (
+            !hit &&
+            ufo &&
+            playerBullet &&
+            hitRect(playerBullet.x, playerBullet.y, ufo.x, ufo.y, 60, 22)
+          ) {
+            explode(ufo.x + 30, ufo.y + 10, RED, 20);
+            score += 100 + Math.floor(Math.random() * 5) * 50;
+            updateHUD();
+            ufo = null;
+            playerBullet = null;
+          }
+          // vs shields
+          if (playerBullet) {
+            for (const b of shields) {
+              if (b.hp <= 0) continue;
+              if (
+                hitRect(playerBullet.x, playerBullet.y, b.x, b.y, BLOCK, BLOCK)
+              ) {
+                b.hp--;
+                playerBullet = null;
+                break;
+              }
+            }
+          }
+        }
+
+        // ── Collision: enemy bullets vs player & shields ──────────────────────
+        enemyBullets = enemyBullets.filter((eb) => {
+          // vs shields
+          for (const b of shields) {
+            if (b.hp <= 0) continue;
+            if (hitRect(eb.x, eb.y, b.x, b.y, BLOCK, BLOCK)) {
+              b.hp--;
+              return false;
+            }
+          }
+          // vs player
+          if (hitRect(eb.x, eb.y, player.x, player.y, PW, PH)) {
+            explode(player.x + PW / 2, player.y + PH / 2, GREEN, 20);
+            lives--;
+            updateHUD();
+            player = makePlayer();
+            if (lives <= 0) {
+              state = "gameover";
+              showOverlay(
+                "GAME OVER",
+                `Score: ${score}`,
+                "Press SPACE to restart",
+              );
+            } else {
+              state = "dead";
+              showOverlay(
+                "YOU DIED",
+                `Lives remaining: ${lives}`,
+                "Press SPACE to continue",
+              );
+            }
+            return false;
+          }
+          return true;
+        });
+
+        // ── Invaders reach bottom ─────────────────────────────────────────────
+        for (const inv of invaders) {
+          if (inv.alive && inv.y + INV_H >= player.y) {
+            state = "gameover";
+            showOverlay(
+              "GAME OVER",
+              "The invaders reached Earth!",
+              "Press SPACE to restart",
+            );
+            return;
+          }
+        }
+
+        // ── All invaders dead = win ───────────────────────────────────────────
+        if (invaders.every((i) => !i.alive)) {
+          state = "win";
+          showOverlay(
+            `LEVEL ${level} CLEAR!`,
+            `Score: ${score}`,
+            "Press SPACE for next level",
+          );
+        }
+
+        // ── Particles ─────────────────────────────────────────────────────────
+        particles.forEach((p) => {
+          p.x += p.vx * dt;
+          p.y += p.vy * dt;
+          p.life -= dt;
+        });
+        particles = particles.filter((p) => p.life > 0);
+      }
+
+      // ── Render ────────────────────────────────────────────────────────────────
+      function render() {
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, W, H);
+
+        // Ground line
+        ctx.strokeStyle = GREEN;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, H - 28);
+        ctx.lineTo(W, H - 28);
+        ctx.stroke();
+
+        // Stars
+        ctx.fillStyle = "#ffffff22";
+        for (let i = 0; i < 80; i++) {
+          // deterministic star positions based on index
+          const sx = (i * 137 + 41) % W;
+          const sy = (i * 97 + 17) % (H - 80);
+          ctx.fillRect(sx, sy, 1, 1);
+        }
+
+        drawShields();
+
+        // Invaders
+        invaders.forEach((inv) => {
+          if (inv.alive) drawInvader(inv);
+        });
+
+        // UFO
+        drawUFOShip();
+
+        // Player
+        drawPlayer(player);
+
+        // Player bullet
+        if (playerBullet) {
+          ctx.fillStyle = playerBullet.color;
+          ctx.fillRect(playerBullet.x, playerBullet.y, 4, 12);
+        }
+
+        // Enemy bullets
+        enemyBullets.forEach((b) => {
+          ctx.fillStyle = b.color;
+          ctx.fillRect(b.x, b.y, 3, 10);
+        });
+
+        // Particles
+        particles.forEach((p) => {
+          const alpha = Math.max(0, p.life / 1.0);
+          ctx.globalAlpha = alpha;
+          ctx.fillStyle = p.color;
+          ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+        });
+        ctx.globalAlpha = 1;
+      }
+
+      // ── Overlay helper ────────────────────────────────────────────────────────
+      function showOverlay(title, line1, line2) {
+        overlay.style.display = "flex";
+        overlay.innerHTML = `
+    <canvas id="title-canvas"></canvas>
+    <p>${line1}</p>
+    <p class="sub">${line2}</p>
+  `;
+        // rebuild pixel title with whatever text was passed in
+        const saved = FONT3;
+        // draw using existing drawPixelTitle but with custom text
+        (function drawCustomTitle() {
+          const tc = document.getElementById("title-canvas");
+          const text = title.toUpperCase();
+          const cols = text.length;
+          tc.width = cols * COLF;
+          tc.height = ROWH + 10;
+          const tx = tc.getContext("2d");
+          tx.shadowColor = "#00ff00";
+          tx.shadowBlur = 10;
+          text.split("").forEach((ch, ci) => {
+            const glyph = saved[ch] || saved[" "];
+            if (!glyph) return;
+            for (let row = 0; row < 5; row++) {
+              const bits = glyph[row];
+              for (let col = 0; col < 5; col++) {
+                if (bits & (1 << (4 - col))) {
+                  const t = row / 4;
+                  tx.fillStyle = `rgb(0,${Math.round(220 + t * 35)},${Math.round(220 - t * 220)})`;
+                  tx.fillRect(
+                    ci * COLF + col * SCALE + SCALE,
+                    row * SCALE + SCALE,
+                    SCALE - 1,
+                    SCALE - 1,
+                  );
+                }
+              }
+            }
+            tx.fillStyle = "#00ffcc";
+            tx.shadowBlur = 6;
+            tx.fillRect(ci * COLF + 2 * SCALE, 0, SCALE - 1, SCALE - 1);
+            tx.fillRect(ci * COLF + 4 * SCALE, 0, SCALE - 1, SCALE - 1);
+          });
+        })();
+        // keep rendering particles etc.
+        if (!rafId) {
+          lastTime = performance.now();
+          rafId = requestAnimationFrame(loop);
+        }
+      }
+
+      // Kick off title render
+      render();
+    </script>
+  </body>
+</html>
