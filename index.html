@@ -45,7 +45,7 @@
         align-items: center;
         width: 100%;
         max-width: 700px;
-        padding: 10px 16px;
+        padding: 8px 16px;
         gap: 12px;
         margin-top: 8px;
       }
@@ -55,34 +55,44 @@
           display: none;
         }
       }
-      .ctrl-btn {
-        background: rgba(0, 255, 0, 0.12);
+      #joy-zone {
+        flex: 1;
+        height: 72px;
+        background: rgba(0, 255, 0, 0.07);
         border: 2px solid #0f0;
-        border-radius: 10px;
-        color: #0f0;
-        font-size: 26px;
-        line-height: 1;
-        width: 70px;
-        height: 60px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        user-select: none;
-        -webkit-user-select: none;
-        cursor: pointer;
+        border-radius: 36px;
+        position: relative;
         touch-action: none;
+        overflow: hidden;
       }
-      .ctrl-btn:active {
-        background: rgba(0, 255, 0, 0.3);
+      #joy-knob {
+        width: 52px;
+        height: 52px;
+        background: rgba(0, 255, 0, 0.25);
+        border: 2px solid #0f0;
+        border-radius: 50%;
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+        transition: left 0.05s;
       }
       #btn-fire {
         width: 90px;
-        height: 60px;
-        font-size: 14px;
+        height: 72px;
+        flex-shrink: 0;
+        font-size: 15px;
+        font-family: "Courier New", monospace;
         letter-spacing: 1px;
-        border-color: #0ff;
+        border: 2px solid #0ff;
+        border-radius: 12px;
         color: #0ff;
         background: rgba(0, 255, 255, 0.1);
+        cursor: pointer;
+        user-select: none;
+        -webkit-user-select: none;
+        touch-action: none;
       }
       #btn-fire:active {
         background: rgba(0, 255, 255, 0.3);
@@ -118,9 +128,8 @@
     </div>
     <canvas id="c" width="700" height="440"></canvas>
     <div id="controls">
-      <button class="ctrl-btn" id="btn-left">&#9664;</button>
-      <button class="ctrl-btn" id="btn-fire" id="btn-fire">FIRE</button>
-      <button class="ctrl-btn" id="btn-right">&#9654;</button>
+      <div id="joy-zone"><div id="joy-knob"></div></div>
+      <button id="btn-fire">FIRE</button>
     </div>
     <div id="overlay">
       <canvas id="title-canvas"></canvas>
@@ -239,33 +248,6 @@
       const keys = {};
 
       // ── Mobile touch controls ─────────────────────────────────────────────────
-      function bindBtn(id, code) {
-        const el = document.getElementById(id);
-        el.addEventListener(
-          "touchstart",
-          (e) => {
-            e.preventDefault();
-            keys[code] = true;
-            triggerAction(code);
-          },
-          { passive: false },
-        );
-        el.addEventListener(
-          "touchend",
-          (e) => {
-            e.preventDefault();
-            keys[code] = false;
-          },
-          { passive: false },
-        );
-        el.addEventListener("mousedown", (e) => {
-          keys[code] = true;
-          triggerAction(code);
-        });
-        el.addEventListener("mouseup", (e) => {
-          keys[code] = false;
-        });
-      }
       function triggerAction(code) {
         if (code !== "Space") return;
         if (state === "title") startGame();
@@ -273,9 +255,81 @@
         else if (state === "win") nextLevel(true);
         else if (state === "gameover") resetAll();
       }
-      bindBtn("btn-left", "ArrowLeft");
-      bindBtn("btn-right", "ArrowRight");
-      bindBtn("btn-fire", "Space");
+
+      // Joystick slide zone
+      const joyZone = document.getElementById("joy-zone");
+      const joyKnob = document.getElementById("joy-knob");
+      const DEAD = 18; // px deadzone
+      let joyActive = false,
+        joyStartX = 0;
+
+      function joyMove(clientX) {
+        const rect = joyZone.getBoundingClientRect();
+        const dx = clientX - joyStartX;
+        const maxR = rect.width / 2 - 26;
+        const clamp = Math.max(-maxR, Math.min(maxR, dx));
+        joyKnob.style.left = rect.width / 2 + clamp + "px";
+        keys["ArrowLeft"] = dx < -DEAD;
+        keys["ArrowRight"] = dx > DEAD;
+      }
+      function joyReset() {
+        joyActive = false;
+        keys["ArrowLeft"] = keys["ArrowRight"] = false;
+        joyKnob.style.left = "50%";
+      }
+      joyZone.addEventListener(
+        "touchstart",
+        (e) => {
+          e.preventDefault();
+          joyActive = true;
+          joyStartX = e.touches[0].clientX;
+          joyMove(joyStartX);
+        },
+        { passive: false },
+      );
+      joyZone.addEventListener(
+        "touchmove",
+        (e) => {
+          e.preventDefault();
+          if (joyActive) joyMove(e.touches[0].clientX);
+        },
+        { passive: false },
+      );
+      joyZone.addEventListener(
+        "touchend",
+        (e) => {
+          e.preventDefault();
+          joyReset();
+        },
+        { passive: false },
+      );
+
+      // Fire button
+      const fireBtn = document.getElementById("btn-fire");
+      fireBtn.addEventListener(
+        "touchstart",
+        (e) => {
+          e.preventDefault();
+          keys["Space"] = true;
+          triggerAction("Space");
+        },
+        { passive: false },
+      );
+      fireBtn.addEventListener(
+        "touchend",
+        (e) => {
+          e.preventDefault();
+          keys["Space"] = false;
+        },
+        { passive: false },
+      );
+      fireBtn.addEventListener("mousedown", () => {
+        keys["Space"] = true;
+        triggerAction("Space");
+      });
+      fireBtn.addEventListener("mouseup", () => {
+        keys["Space"] = false;
+      });
       document.addEventListener("keydown", (e) => {
         keys[e.code] = true;
         if (e.code === "Space") e.preventDefault();
