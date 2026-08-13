@@ -116,7 +116,7 @@
       <span>LIVES: <span id="livesVal">3</span></span>
       <span>LEVEL: <span id="levelVal">1</span></span>
     </div>
-    <canvas id="c" width="700" height="520"></canvas>
+    <canvas id="c" width="700" height="440"></canvas>
     <div id="controls">
       <button class="ctrl-btn" id="btn-left">&#9664;</button>
       <button class="ctrl-btn" id="btn-fire" id="btn-fire">FIRE</button>
@@ -202,7 +202,7 @@
       function fitCanvas() {
         const scale = Math.min(1, (window.innerWidth - 8) / 700);
         canvas.style.width = Math.floor(700 * scale) + "px";
-        canvas.style.height = Math.floor(520 * scale) + "px";
+        canvas.style.height = Math.floor(440 * scale) + "px";
       }
       fitCanvas();
       window.addEventListener("resize", fitCanvas);
