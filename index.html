@@ -40,7 +40,7 @@
         max-width: 100vw;
       }
       #controls {
-        display: none;
+        display: flex;
         justify-content: space-between;
         align-items: center;
         width: 100%;
@@ -48,6 +48,12 @@
         padding: 10px 16px;
         gap: 12px;
         margin-top: 8px;
+      }
+      @media (hover: hover) and (pointer: fine) {
+        /* hide on real mouse+keyboard devices */
+        #controls {
+          display: none;
+        }
       }
       .ctrl-btn {
         background: rgba(0, 255, 0, 0.12);
@@ -91,6 +97,7 @@
       }
       #title-canvas {
         image-rendering: pixelated;
+        max-width: 95vw;
       }
       #overlay p {
         font-size: 16px;
@@ -184,13 +191,6 @@
       }
       drawPixelTitle();
 
-      // Scale canvas to fit screen width on mobile
-      function fitCanvas() {
-        const scale = Math.min(1, (window.innerWidth - 8) / 700);
-        canvas.style.width = Math.floor(700 * scale) + "px";
-        canvas.style.height = Math.floor(520 * scale) + "px";
-      }
-
       const canvas = document.getElementById("c");
       const ctx = canvas.getContext("2d");
       const overlay = document.getElementById("overlay");
@@ -198,6 +198,12 @@
       const livesEl = document.getElementById("livesVal");
       const levelEl = document.getElementById("levelVal");
 
+      // Scale canvas to fit screen width on mobile
+      function fitCanvas() {
+        const scale = Math.min(1, (window.innerWidth - 8) / 700);
+        canvas.style.width = Math.floor(700 * scale) + "px";
+        canvas.style.height = Math.floor(520 * scale) + "px";
+      }
       fitCanvas();
       window.addEventListener("resize", fitCanvas);
       const W = canvas.width;
@@ -270,11 +276,6 @@
       bindBtn("btn-left", "ArrowLeft");
       bindBtn("btn-right", "ArrowRight");
       bindBtn("btn-fire", "Space");
-
-      // Show touch controls only on touch devices
-      if (window.matchMedia("(pointer: coarse)").matches) {
-        document.getElementById("controls").style.display = "flex";
-      }
       document.addEventListener("keydown", (e) => {
         keys[e.code] = true;
         if (e.code === "Space") e.preventDefault();
